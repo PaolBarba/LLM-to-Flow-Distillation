@@ -81,10 +81,27 @@ PY
 
 # The existing provider requires HTTPS. Trust only this job's local certificate.
 umask 077
+# Avoid inheriting site v3_ca extensions: OpenSSL 1.1.1 can otherwise emit
+# duplicate basicConstraints when combined with -addext, breaking verification.
+cat > "$JOB_ROOT/tls.cnf" <<'TLS'
+[req]
+distinguished_name = subject
+x509_extensions = server
+prompt = no
+[subject]
+CN = localhost
+[server]
+subjectAltName = IP:127.0.0.1,DNS:localhost
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyEncipherment,keyCertSign
+extendedKeyUsage = serverAuth
+subjectKeyIdentifier = hash
+TLS
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -config "$JOB_ROOT/tls.cnf" \
   -keyout "$JOB_ROOT/server.key" -out "$JOB_ROOT/server.pem" \
-  -subj '/CN=localhost' -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
-  -addext 'basicConstraints=critical,CA:TRUE' > "$JOB_ROOT/tls.log" 2>&1
+  > "$JOB_ROOT/tls.log" 2>&1
+openssl verify -CAfile "$JOB_ROOT/server.pem" "$JOB_ROOT/server.pem"
 export REQUESTS_CA_BUNDLE="$JOB_ROOT/server.pem"
 export ADM_LLM_PROVIDER=litellm
 # This selects the repository's Responses transport; no LiteLLM service is needed.
