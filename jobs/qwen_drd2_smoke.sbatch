@@ -63,7 +63,9 @@ IFS=',' read -r -a JOB_GPUS <<< "${CUDA_VISIBLE_DEVICES:?Slurm must expose alloc
 
 # Scope forward-compatibility libraries to the CUDA 13 vLLM environment.
 # FlowMol keeps its own CUDA 12 runtime and inherited library search path.
-VLLM_ENV=(env)
+# Include environment tools needed by subprocesses, even without activation.
+# Use native sampling to avoid FlashInfer's JIT CUDA compiler requirement.
+VLLM_ENV=(env "PATH=$(dirname "$VLLM_BIN"):$PATH" VLLM_USE_FLASHINFER_SAMPLER=0)
 if [[ -f "$VLLM_CUDA_COMPAT_DIR/libcuda.so.1" ]]; then
   VLLM_ENV+=("LD_LIBRARY_PATH=$VLLM_CUDA_COMPAT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
 fi

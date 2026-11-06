@@ -94,3 +94,7 @@ and the transport check are in `runs/qwen-drd2-JOBID/`; experiment outputs and
 LLM traces are under its `experiment/` directory. The Qwen server is stopped
 when the script exits. Inspect `vllm.log` first if startup or the transport
 check fails. The script has not been validated in a live GPU allocation.
+
+The smoke job uses the PyTorch-native sampler (`VLLM_USE_FLASHINFER_SAMPLER=0`)
+to avoid FlashInfer sampling-kernel compilation during startup. It also puts
+the vLLM environment’s `bin` directory on PATH for serving subprocesses.
