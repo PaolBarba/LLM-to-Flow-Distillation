@@ -16,6 +16,8 @@ cd "${REPO_ROOT:-${SLURM_SUBMIT_DIR:?Submit with sbatch from the repository root
 REPO_ROOT="$PWD"
 APP_PYTHON="${APP_PYTHON:-/leonardo_work/IscrC_HRC/environments/genomics_steering/bin/python}"
 VLLM_BIN="${VLLM_BIN:-$REPO_ROOT/.venv-vllm/bin/vllm}"
+VLLM_PYTHON="${VLLM_PYTHON:-$(dirname "$VLLM_BIN")/python}"
+VLLM_CUDA_COMPAT_DIR="${VLLM_CUDA_COMPAT_DIR:-$REPO_ROOT/.cache/cuda-compat-13-0/usr/local/cuda-13.0/compat}"
 MODEL_PATH="${MODEL_PATH:-/leonardo_scratch/large/userexternal/pbarba00/huggingface/Qwen3-14B}"
 FLOWMOL_RUNTIME_HOME="${FLOWMOL_RUNTIME_HOME:-$(dirname "$MODEL_PATH")/FlowMol3-runtime}"
 JOB_ROOT="${JOB_ROOT:-$REPO_ROOT/runs/qwen-drd2-${SLURM_JOB_ID}}"
@@ -59,6 +61,22 @@ export JOB_ROOT
 IFS=',' read -r -a JOB_GPUS <<< "${CUDA_VISIBLE_DEVICES:?Slurm must expose allocated GPUs}"
 (( ${#JOB_GPUS[@]} >= 2 )) || { echo 'Two visible GPUs are required.'; exit 1; }
 
+# Scope forward-compatibility libraries to the CUDA 13 vLLM environment.
+# FlowMol keeps its own CUDA 12 runtime and inherited library search path.
+VLLM_ENV=(env)
+if [[ -f "$VLLM_CUDA_COMPAT_DIR/libcuda.so.1" ]]; then
+  VLLM_ENV+=("LD_LIBRARY_PATH=$VLLM_CUDA_COMPAT_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
+fi
+CUDA_VISIBLE_DEVICES="${JOB_GPUS[0]}" "${VLLM_ENV[@]}" "$VLLM_PYTHON" - <<'PY' || {
+import torch
+print(f'vLLM PyTorch {torch.__version__}, CUDA {torch.version.cuda}', flush=True)
+torch.cuda.init()
+print(f'vLLM GPU: {torch.cuda.get_device_name(0)}', flush=True)
+PY
+  echo "vLLM CUDA initialization failed. Check driver compatibility and VLLM_CUDA_COMPAT_DIR=$VLLM_CUDA_COMPAT_DIR" >&2
+  exit 1
+}
+
 # The existing provider requires HTTPS. Trust only this job's local certificate.
 umask 077
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -75,14 +93,14 @@ unset API_KEY_FILE
 export NO_PROXY="127.0.0.1,localhost${NO_PROXY:+,$NO_PROXY}"
 
 # Support both older and newer vLLM YaRN configuration syntax.
-"$VLLM_BIN" serve --help > "$JOB_ROOT/vllm-help.txt"
+"${VLLM_ENV[@]}" "$VLLM_BIN" serve --help > "$JOB_ROOT/vllm-help.txt"
 if grep -q -- '--rope-scaling' "$JOB_ROOT/vllm-help.txt"; then
   YARN_ARGS=(--rope-scaling '{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}')
 else
   YARN_ARGS=(--hf-overrides '{"rope_parameters":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000}}')
 fi
 CUDA_VISIBLE_DEVICES="${JOB_GPUS[0]}" VLLM_API_KEY="$LITELLM_API_KEY" \
-  "$VLLM_BIN" serve "$MODEL_PATH" --served-model-name qwen3-14b-local \
+  "${VLLM_ENV[@]}" "$VLLM_BIN" serve "$MODEL_PATH" --served-model-name qwen3-14b-local \
   --host 127.0.0.1 --port "${QWEN_PORT:-8000}" \
   --ssl-keyfile "$JOB_ROOT/server.key" --ssl-certfile "$JOB_ROOT/server.pem" \
   --dtype bfloat16 --tensor-parallel-size 1 --gpu-memory-utilization 0.90 \

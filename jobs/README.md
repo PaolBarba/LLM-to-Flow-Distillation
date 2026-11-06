@@ -51,6 +51,16 @@ paths. The environments above do not install the separate FlowMol runtime;
 complete step 2 as well. If the log reports a missing executable, check the
 printed path or set `APP_PYTHON` / `VLLM_BIN` to an existing installation.
 
+The PyPI vLLM build installs CUDA 13, whereas Leonardo's R535 nodes expose
+CUDA driver API 12.2. NVIDIA's RHEL8 `cuda-compat-13-0` libraries are already
+installed in `.cache/cuda-compat-13-0/usr/local/cuda-13.0/compat` in this checkout.
+The job adds these libraries to `LD_LIBRARY_PATH` only for vLLM
+and checks CUDA initialization before starting the server. This follows
+[NVIDIA's forward compatibility matrix](https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html)
+for R535 and data center GPUs. FlowMol retains its separate CUDA 12 environment.
+Set `VLLM_CUDA_COMPAT_DIR` to use a different compatibility library directory,
+and `VLLM_PYTHON` if the interpreter is not beside `VLLM_BIN`.
+
 Submit **from the repository root** after setup and committing source changes:
 
 ```bash
