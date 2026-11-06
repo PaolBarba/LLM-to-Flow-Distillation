@@ -98,3 +98,8 @@ check fails. The script has not been validated in a live GPU allocation.
 The smoke job uses the PyTorch-native sampler (`VLLM_USE_FLASHINFER_SAMPLER=0`)
 to avoid FlashInfer sampling-kernel compilation during startup. It also puts
 the vLLM environment’s `bin` directory on PATH for serving subprocesses.
+
+If the teacher omits a molecule judgment, the host retains the valid rows and
+requests each missing molecule individually. The smoke profile permits at most
+two recovery calls per original batch, within the existing API budgets.
+Duplicate or unexpected IDs remain validation errors.

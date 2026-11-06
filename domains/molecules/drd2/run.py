@@ -25,6 +25,7 @@ from domains.molecules.drd2.cards import FINAL_GOAL, MoleculeCandidateCard
 from domains.molecules.drd2.teacher import (
     MoleculeGoalProposalResponse,
     MoleculeJudgmentResponse,
+    MoleculeJudgmentRow,
     MoleculeSemanticAuditResponse,
     build_audit_request,
     build_controller_request,
@@ -382,6 +383,48 @@ def generate_cohort(
     }
 
 
+
+def judge_with_coverage(
+    request: StructuredRequest,
+    cards: Sequence[MoleculeCandidateCard],
+    *,
+    executor: RoleExecutor,
+    maximum_redispatches: int,
+) -> tuple[list[MoleculeJudgmentRow], list[dict[str, Any]]]:
+    """Preserve valid rows and request each omitted card individually."""
+    if maximum_redispatches < 0:
+        raise ValueError("maximum coverage redispatches must be nonnegative")
+    parsed, metadata = executor.execute(request, MoleculeJudgmentResponse)
+    requests = [metadata]
+    expected = {card.item_id for card in cards}
+    observed = [row.item_id for row in parsed.results]
+    if len(observed) != len(set(observed)) or not set(observed) <= expected:
+        raise ValueError("judgment response contains duplicate or unexpected item IDs")
+    combined = {row.item_id: row for row in parsed.results}
+    redispatches = 0
+    for card in cards:
+        if card.item_id in combined:
+            continue
+        if redispatches >= maximum_redispatches:
+            missing = sorted(expected - combined.keys())
+            raise ValueError(f"molecule judgment coverage retry limit exhausted; missing: {missing}")
+        redispatches += 1
+        payload = request.user_payload
+        payload["candidates"] = [card.model_dump(mode="json")]
+        context = request.logical_context
+        context.update(item_ids=[card.item_id], coverage_redispatch=redispatches,
+                       coverage_parent_request_hash=request.request_hash)
+        recovery = replace(request, user_payload_json=canonical_json(payload),
+                           logical_context_json=canonical_json(context))
+        print(f"Retrying omitted molecule judgment: {card.item_id}", flush=True)
+        recovered, recovery_metadata = executor.execute(recovery, MoleculeJudgmentResponse)
+        for row in validated_rows(recovered, [card]):
+            combined[row.item_id] = row
+        requests.append(recovery_metadata)
+    complete = MoleculeJudgmentResponse(results=list(combined.values()))
+    return validated_rows(complete, cards), requests
+
+
 def judge_cohort(
     cohort: Mapping[str, Any],
     *,
@@ -423,12 +466,14 @@ def judge_cohort(
                 iteration=iteration,
                 repeat_index=repeat_index,
             )
-            parsed, request_metadata = executor.execute(
-                request, MoleculeJudgmentResponse
+            judged_rows, request_metadata = judge_with_coverage(
+                request, chunk, executor=executor,
+                maximum_redispatches=int(judge_config.get(
+                    "maximum_coverage_redispatches_per_chunk", 0)),
             )
-            for result in validated_rows(parsed, chunk):
+            for result in judged_rows:
                 combined[result.item_id] = result.model_dump(mode="json")
-            metadata.append(request_metadata)
+            metadata.extend(request_metadata)
         if set(combined) != set(cards):
             raise ValueError("molecule judgment repeat did not cover all cards")
         record = {
